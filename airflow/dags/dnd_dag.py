@@ -1,164 +1,223 @@
+import json
+import requests
+from random import choice, randint, sample
+
 import airflow
-import datetime
-import urllib.request as request
-import pandas as pd
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator, BranchPythonOperator
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.operators.postgres_operator import PostgresOperator
-
-import json
-import requests
 from faker import Faker
-import random
 
-default_args_dict = {
-    'start_date': datetime.datetime(2020, 6, 25, 0, 0, 0),
-    'concurrency': 1,
-    'schedule_interval': "0 0 * * *",
-    'retries': 1,
-    'retry_delay': datetime.timedelta(minutes=5),
+BASE_DIRECTORY = "/opt/airflow/dags"
+NUMBER_OF_CHARACTERS = 5
+
+# DAG default arguments
+default_args = {
+	'start_date': airflow.utils.dates.days_ago(0),
+	'concurrency': 1,
+	'retries': 0
 }
 
+# Generate the DAG
 dnd_dag = DAG(
     dag_id='dnd_dag',
-    default_args=default_args_dict,
+    default_args=default_args,
     catchup=False,
-    template_searchpath=['/opt/airflow/dags/']
 )
 
-def _generate_characters(output_folder: str, epoch: str):
+def gen_base_character() -> dict:
+	"""
+	Generate a random base character.
+	"""
+	
+	# Load races and classes from API
+	races = requests.get('https://www.dnd5eapi.co/api/races').json()['results']
+	classes = requests.get('https://www.dnd5eapi.co/api/classes').json()['results']
+	languages = requests.get('https://www.dnd5eapi.co/api/languages').json()['results']
 
-	random.seed(epoch)
-	file_name = output_folder + "/characters.json"
-	character_data = []
+	# Initialize faker
+	fake = Faker()
 
-	for i in range(5):
-		name = Faker().name()
+	# Generate a character and return it
+	return {
+		'name': fake.name(),
+		'attributes': str([
+			randint(6, 18),
+			randint(2, 18),
+			randint(2, 18),
+			randint(2, 18),
+			randint(2, 18),
+			randint(2, 18)
+		]),
+		"race": choice(races)['index'],
+		"class": choice(classes)['index'],
+		"languages": choice(languages)['index'],
+		"level": str(randint(1, 3))
+	}
 
-		race_data = requests.get('https://www.dnd5eapi.co/api/races').json()
-		class_data = requests.get('https://www.dnd5eapi.co/api/classes').json()
-		class_of = random.choice(class_data['results'])['index']
+def gen_base_characters(n: int) -> list:
+	"""
+	Generate a list of n base characters.
+	"""
 
-		character = {
-			'name': name,
-			'attributes': f"[{','.join([str(x) for x in [random.randint(6, 18), random.randint(2, 18), random.randint(2, 18), random.randint(2, 18), random.randint(2, 18), random.randint(2, 18)]])}]",
-			'race': random.choice(race_data['results'])['index'],
-			'languages': "french",
-			'class': class_of,
-			'level': str(random.randint(1, 3))
-		}
+	# Generate n characters
+	characters = [gen_base_character() for _ in range(n)]
 
-		character_data.append(character)
+	# Write characters to file
+	with open(f'{BASE_DIRECTORY}/characters.json', 'w') as f:
+		json.dump(characters, f, indent=4)
 
-		print(character_data[i])
 
-	with open(file_name, 'w') as json_file:
-		json.dump(character_data, json_file, indent=4)
-
-	print(f'Data saved to {file_name}')
-
-task_one = PythonOperator(
+generate_base_task = PythonOperator(
     task_id='generate_characters',
+    python_callable=gen_base_characters,
+	op_kwargs={
+		'n': NUMBER_OF_CHARACTERS
+	},
     dag=dnd_dag,
-    python_callable=_generate_characters,
-    op_kwargs={
-        "output_folder": "/opt/airflow/dags",
-        "epoch": "{{ execution_date.int_timestamp }}"
-    },
-    trigger_rule='all_success',
-    depends_on_past=False,
 )
 
-def _generate_spells(output_folder: str, epoch: str):
+def gen_spells(character: dict) -> dict:
+	"""
+	Generate spell for the given character and augment the character dict.
+	"""
 
-	random.seed(epoch)
-	file_name = output_folder + "/characters.json"
-	spells = []
+	# Load spells from API
+	spells = requests.get(f'https://www.dnd5eapi.co/api/classes/{character["class"]}/spells').json()['results']
 
-	with open(file_name, 'r') as json_file:
-		data = json.load(json_file)
+	# Generate a spell and return it
+	number_of_spells = int(character['level']) + 3
+	selected_spells = []
 
-	for character in data:
-		class_data = requests.get('https://www.dnd5eapi.co/api/classes/' + character['class']).json()
-		print(character)
-		if "spells" in class_data:
-			print("The 'spells' key exists in the JSON object.")
-			spells_data = requests.get('https://www.dnd5eapi.co/api/classes/' + character['class'] + '/spells').json()
-			number_spells = int(character['level']) + 3
-			for i in range(number_spells):
-				spells.append(random.choice(spells_data['results'])['index'])
-				print(spells[i])
-		else:
-			print("The 'spells' key does not exist in the JSON object.")
-		#character['spells'] = ["Fireball", "Magic Missile"]  # Add a "spells" attribute with a list of spells
-		new_seed = random.randint(100000, 1000000000)
-		random.seed(epoch + str(new_seed))
+	if len(spells) > number_of_spells:
+		selected_spells = sample(spells, number_of_spells)
+	else:
+		selected_spells = spells
 
-	#with open(file_name, 'w') as json_file:
-		#json.dump(data, json_file, indent=4)
+	# Add spells to character
+	character['spells'] = str([spell['index'] for spell in selected_spells]).replace("'", "")
 
-	print(f'Data saved to {file_name}')
+	return character
 
-task_two = PythonOperator(
-    task_id='generate_spells',
-    dag=dnd_dag,
-    python_callable=_generate_spells,
-    op_kwargs={
-        "output_folder": "/opt/airflow/dags",
-        "epoch": "{{ execution_date.int_timestamp }}"
-    },
-    trigger_rule='all_success',
-    depends_on_past=False,
+def gen_proficiencies(character: dict) -> dict:
+	"""
+	Generate proficiencies for the given character and augment the character dict.
+	"""
+
+	# Load proficiencies from API
+	proficiency_choices = requests.get(f'https://www.dnd5eapi.co/api/classes/{character["class"]}/').json()['proficiency_choices'][0]
+
+	number_of_proficiencies = proficiency_choices['choose']
+	proficiencies = sample(proficiency_choices['from']['options'], number_of_proficiencies)
+	proficiencies = [proficiency['item']['index'] for proficiency in proficiencies]
+
+	# Add proficiencies to character
+	character['proficiencies'] = str(proficiencies).replace("'", "")
+
+	return character
+
+def gen_spells_for_characters() -> None:
+	"""
+	Load characters from json file, generate spells for each character and write the augmented characters back to the file.
+	"""
+
+	# Load characters from file
+	with open(f'{BASE_DIRECTORY}/characters.json', 'r') as f:
+		characters = json.load(f)
+
+	# Generate spells for each character
+	characters = [gen_spells(character) for character in characters]
+	print(characters)
+
+	# Write characters to file
+	with open(f'{BASE_DIRECTORY}/characters.json', 'w') as f:
+		json.dump(characters, f, indent=4)
+
+def gen_proficiencies_for_characters() -> None:
+	"""
+	Load characters from json file, generate proficiencies for each character and write the augmented characters back to the file.
+	"""
+
+	# Load characters from file
+	with open(f'{BASE_DIRECTORY}/characters.json', 'r') as f:
+		characters = json.load(f)
+
+	# Generate spells for each character
+	characters = [gen_proficiencies(character) for character in characters]
+	print(characters)
+
+	# Write characters to file
+	with open(f'{BASE_DIRECTORY}/characters.json', 'w') as f:
+		json.dump(characters, f, indent=4)
+
+generate_spells_task = PythonOperator(
+	task_id='generate_spells',
+	python_callable=gen_spells_for_characters,
+	dag=dnd_dag,
 )
 
-def _create_character_query(output_folder: str):
-	df = pd.read_json(output_folder+"/characters.json", orient = "records")
-	with open("/opt/airflow/dags/character.sql", "w") as f:
-		df_iterable = df.iterrows()
-		f.write(
-			"CREATE TABLE IF NOT EXISTS character (\n"
-			"name VARCHAR(255),\n"
-			"attributes VARCHAR(255),\n"
-			"race VARCHAR(255),\n"
-			"languages VARCHAR(255),\n"
-			"class VARCHAR(255),\n"
-			"level VARCHAR(255)\n"
-			");\n"
-		)
+generate_proficiencies_task = PythonOperator(
+	task_id='generate_proficiencies',
+	python_callable=gen_proficiencies_for_characters,
+	dag=dnd_dag,
+)
 
-		for index, row in df_iterable:
-			name = row['name']
-			attributes = row['attributes']
-			race = row['race']
-			languages = row['languages']
-			classs = row['class']
-			level = row['level']
+def insert_characters_into_db() -> None:
+	"""
+	Load characters from json file and insert them into the database.
+	"""
+
+	# Load characters from file
+	with open(f'{BASE_DIRECTORY}/characters.json', 'r') as f:
+		characters = json.load(f)
+
+	with open(f'{BASE_DIRECTORY}/characters.sql', 'w') as f:
+
+		# Create table
+		f.write("""
+		  	DROP TABLE IF EXISTS character;
+			CREATE TABLE character (
+				name VARCHAR(255),
+				attributes VARCHAR(255),
+				race VARCHAR(255),
+				languages VARCHAR(255),
+				class VARCHAR(255),
+		  		spells VARCHAR(255),
+		  		proficiencies VARCHAR(255),
+				level VARCHAR(255)
+		  	);
+		""")
+
+		# Insert characters into database
+		for character in characters:
+			f.write(f"""
+				INSERT INTO character VALUES (
+					'{character['name']}',
+					'{character['attributes']}',
+					'{character['race']}',
+					'{character['languages']}',
+					'{character['class']}',
+					'{character['spells']}',
+					'{character['proficiencies']}',
+					'{character['level']}'
+				);	
+		   """)
 			
-			f.write(
-				"INSERT INTO character VALUES ("
-				#",".join(row.dict().values())
-				f"'{name}', '{attributes}', '{race}', '{languages}', '{classs}', '{level}'"
-				");\n"
-			)
-		
+		# Close and save file
 		f.close()
 
-task_three = PythonOperator(
-    task_id='create_character_query',
-    dag=dnd_dag,
-    python_callable=_create_character_query,
-    op_kwargs={
-        'output_folder': '/opt/airflow/dags'
-    },
-    trigger_rule='all_success',
+generate_sql_task = PythonOperator(
+	task_id='insert_characters',
+	python_callable=insert_characters_into_db,
+	dag=dnd_dag,
 )
 
-task_four = PostgresOperator(
+insert_characters_into_db_task = PostgresOperator(
     task_id='insert_character_query',
     dag=dnd_dag,
     postgres_conn_id='postgres_default',
-    sql='character.sql',
+    sql='characters.sql',
     trigger_rule='all_success',
     autocommit=True
 )
@@ -167,7 +226,6 @@ end = DummyOperator(
     task_id='end',
     dag=dnd_dag,
     trigger_rule='none_failed',
-    depends_on_past=False
 )
 
-task_one >> task_two >> task_three >> task_four >> end
+generate_base_task >> generate_spells_task >> generate_proficiencies_task >> generate_sql_task >> insert_characters_into_db_task >> end
