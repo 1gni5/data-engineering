@@ -9,6 +9,7 @@ from airflow import DAG
 from dataclasses import dataclass
 from airflow.operators.python_operator import PythonOperator
 from airflow.operators.dummy_operator import DummyOperator
+from airflow.operators.postgres_operator import PostgresOperator
 from sys import path
 
 BASE_FOLDER = "/opt/airflow/dags/"
@@ -127,10 +128,53 @@ find_closest_country_task = PythonOperator(
     dag=iss_dag,
 )
 
+def _create_country_query():
+    with open(f'{BASE_FOLDER}/closest_country.json', 'r') as f:
+        closest_country = json.load(f)
+        with open("/opt/airflow/dags/country.sql", "w") as f:
+            f.write(
+                "CREATE TABLE IF NOT EXISTS country (\n"
+                "name VARCHAR(255),\n"
+                "continent VARCHAR(255),\n"
+                "latitude VARCHAR(255),\n"
+                "longitude VARCHAR(255)\n"
+                ");\n"
+            )
+
+            name = closest_country['name']
+            continent = closest_country['continent']
+            latitude = closest_country['latitude']
+            longitude = closest_country['longitude']
+            
+            f.write(
+                "INSERT INTO country VALUES ("
+                #",".join(row.dict().values())
+                f"'{name}', '{continent}', '{latitude}', '{longitude}'"
+                ");\n"
+            )
+            
+            f.close()
+
+create_country_query_task = PythonOperator(
+    task_id='create_country_query',
+    dag=iss_dag,
+    python_callable=_create_country_query,
+    trigger_rule='all_success',
+)
+
+insert_country_query = PostgresOperator(
+    task_id='insert_country_query',
+    dag=iss_dag,
+    postgres_conn_id='postgres_default',
+    sql='country.sql',
+    trigger_rule='all_success',
+    autocommit=True
+)
+
 end = DummyOperator(
     task_id="end",
     dag=iss_dag,
     trigger_rule="none_failed",
 )
 
-fetch_iss_location_task >> find_closest_country_task >> end
+fetch_iss_location_task >> find_closest_country_task >> create_country_query_task >> insert_country_query >> end
