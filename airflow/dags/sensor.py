@@ -4,6 +4,8 @@ from airflow.operators.dummy import DummyOperator
 from airflow.sensors.external_task_sensor import ExternalTaskSensor
 from airflow.sensors.filesystem import FileSensor
 from airflow.operators.python_operator import BranchPythonOperator
+from airflow.operators.postgres_operator import PostgresOperator
+import pandas as pd
 import datetime
 import requests
 import csv
@@ -83,6 +85,39 @@ file_sensor_task = FileSensor(
     poke_interval=10,
 )
 
+def _create_user_query():
+    df = pd.read_csv(f'{BASE_FOLDER}users.csv')
+    with open("/opt/airflow/dags/user.sql", "w") as f:
+        df_iterable = df.iterrows()
+        f.write(
+            "CREATE TABLE IF NOT EXISTS user_csv (\n"
+            "name VARCHAR(255),\n"
+            "email VARCHAR(255),\n"
+            "dob VARCHAR(255),\n"
+            "gender VARCHAR(255)\n"
+            ");\n"
+        )
+        for index, row in df_iterable:
+            name = row['name']
+            email = row['email']
+            dob = row['dob']
+            gender = row['gender']
+            f.write(
+                "INSERT INTO user_csv VALUES ("
+                f"'{name}', '{email}', '{dob}', '{gender}'"
+                ");\n"
+            )
+
+        f.close()
+
+
+create_user_query_task = PythonOperator(
+    task_id='create_user_query',
+    dag=user_age_trend_dag,
+    python_callable=_create_user_query,
+    trigger_rule='all_success',
+)
+
 increase_age_average_task = DummyOperator(
     task_id="increase_age_average",
     dag=user_age_trend_dag,
@@ -93,9 +128,31 @@ decrease_age_average_task = DummyOperator(
     dag=user_age_trend_dag,
 )
 
-# Set up the task dependencies
-(
-    file_sensor_task
-    >> age_average_task
-    >> [increase_age_average_task, decrease_age_average_task]
+insert_character_query_task = PostgresOperator(
+    task_id='insert_character_query',
+    dag=user_age_trend_dag,
+    postgres_conn_id='postgres_default',
+    sql='user.sql',
+    trigger_rule='all_success',
+    autocommit=True
 )
+
+join_tasks = DummyOperator(
+    task_id='coalesce_transformations',
+    dag=user_age_trend_dag,
+    trigger_rule='none_failed'
+)
+
+end = DummyOperator(
+    task_id='end',
+    dag=user_age_trend_dag,
+    trigger_rule='none_failed'
+)
+
+# Set up the task dependencies
+
+file_sensor_task >> [create_user_query_task,age_average_task]
+create_user_query_task >> insert_character_query_task
+age_average_task >> [increase_age_average_task, decrease_age_average_task]
+[increase_age_average_task, decrease_age_average_task,insert_character_query_task] >> join_tasks >> end
+
