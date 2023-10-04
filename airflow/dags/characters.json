@@ -1,0 +1,42 @@
+[
+    {
+        "name": "Alexis Mercado",
+        "attributes": "[13,18,2,13,13,5]",
+        "race": "dwarf",
+        "languages": "french",
+        "class": "cleric",
+        "level": "3"
+    },
+    {
+        "name": "Chad Clark",
+        "attributes": "[11,12,6,12,4,2]",
+        "race": "elf",
+        "languages": "french",
+        "class": "paladin",
+        "level": "3"
+    },
+    {
+        "name": "Austin Brown",
+        "attributes": "[18,12,17,7,6,18]",
+        "race": "halfling",
+        "languages": "french",
+        "class": "bard",
+        "level": "2"
+    },
+    {
+        "name": "Troy Smith",
+        "attributes": "[12,17,12,7,16,4]",
+        "race": "half-orc",
+        "languages": "french",
+        "class": "wizard",
+        "level": "1"
+    },
+    {
+        "name": "Jessica Cordova",
+        "attributes": "[16,5,11,10,11,10]",
+        "race": "human",
+        "languages": "french",
+        "class": "barbarian",
+        "level": "3"
+    }
+]
