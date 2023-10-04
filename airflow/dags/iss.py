@@ -43,10 +43,10 @@ def distance(alat, alon, blat, blon) -> float:
 
 
 # Define default_args as a dictionary
-default_args_dict = {
+default_args = {
     "start_date": airflow.utils.dates.days_ago(0),
     "concurrency": 1,
-    "schedule_interval": None,
+    "schedule_interval": datetime.timedelta(minutes=5),
     "retries": 0,
     "retry_delay": datetime.timedelta(minutes=1),
 }
@@ -54,7 +54,7 @@ default_args_dict = {
 # Create a DAG object
 iss_dag = DAG(
     dag_id="iss_dag",
-    default_args=default_args_dict,
+    default_args=default_args,
     catchup=False,
 )
 
@@ -115,6 +115,8 @@ def find_closest_country():
     with open(BASE_FOLDER + "closest_country.json", "w") as file:
         json.dump(closest_country, file)
 
+    return closest_country
+
 
 fetch_iss_location_task = PythonOperator(
     task_id="fetch_iss_location",
@@ -128,37 +130,37 @@ find_closest_country_task = PythonOperator(
     dag=iss_dag,
 )
 
-def _create_country_query():
+def create_country_query():
     with open(f'{BASE_FOLDER}/closest_country.json', 'r') as f:
         closest_country = json.load(f)
         with open("/opt/airflow/dags/country.sql", "w") as f:
-            f.write(
-                "CREATE TABLE IF NOT EXISTS country (\n"
-                "name VARCHAR(255),\n"
-                "continent VARCHAR(255),\n"
-                "latitude VARCHAR(255),\n"
-                "longitude VARCHAR(255)\n"
-                ");\n"
-            )
+            f.write("""
+                DROP TABLE IF EXISTS country;
+                CREATE TABLE country (
+                name VARCHAR(255),
+                continent VARCHAR(255),
+                latitude VARCHAR(255),
+                longitude VARCHAR(255)
+                );
+            """)
 
             name = closest_country['name']
             continent = closest_country['continent']
             latitude = closest_country['latitude']
             longitude = closest_country['longitude']
             
-            f.write(
-                "INSERT INTO country VALUES ("
-                #",".join(row.dict().values())
-                f"'{name}', '{continent}', '{latitude}', '{longitude}'"
-                ");\n"
-            )
+            f.write(f"""
+                INSERT INTO country VALUES (
+                    '{name}', '{continent}', '{latitude}', '{longitude}'
+                );
+            """)
             
             f.close()
 
 create_country_query_task = PythonOperator(
     task_id='create_country_query',
     dag=iss_dag,
-    python_callable=_create_country_query,
+    python_callable=create_country_query,
     trigger_rule='all_success',
 )
 
